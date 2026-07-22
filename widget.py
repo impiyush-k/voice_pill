@@ -462,19 +462,35 @@ class VoicePillWidget(QWidget):
         """Draw the pill/capsule shape (READY and RECORDING states)."""
         rect = QRectF(cx - w / 2, cy - h / 2, w, h)
 
-        # Background — pitch black
+        # 1. Soft White Back-Glow Aura (Rendered BEFORE main black body)
+        if self._is_chunk_processing:
+            # Smooth breathing pulse (sine wave alpha modulation)
+            pulse = 0.5 + 0.5 * math.sin(self._glow_phase)
+            base_alpha = int(120 + 115 * pulse)
+
+            # 4 concentric soft white backlight layers expanding outwards behind black pill
+            glow_layers = [
+                (7.0, int(base_alpha * 0.15)),   # Outer ambient blur
+                (4.5, int(base_alpha * 0.35)),   # Mid halo
+                (2.5, int(base_alpha * 0.60)),   # Soft glow core
+                (1.0, int(base_alpha * 0.90)),   # Edge highlight
+            ]
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            for expand_px, alpha in glow_layers:
+                glow_rect = rect.adjusted(-expand_px, -expand_px, expand_px, expand_px)
+                glow_radius = radius + expand_px
+                glow_color = QColor(255, 255, 255, max(0, min(255, alpha)))
+                painter.setBrush(QBrush(glow_color))
+                painter.drawRoundedRect(glow_rect, glow_radius, glow_radius)
+
+        # 2. Main Pill Body — pitch black (masks center of white glow)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(*PILL_BG_COLOR)))
         painter.drawRoundedRect(rect, radius, radius)
 
-        # Border — subtle by default, glowing cyan aura when chunk is processing
-        if self._is_chunk_processing:
-            alpha = int(170 + 70 * math.sin(self._glow_phase))
-            glow_color = QColor(0, 220, 255, alpha)  # Glowing cyan pulse
-            pen = QPen(glow_color, 2.0)
-        else:
-            pen = QPen(QColor(*PILL_BORDER_COLOR), PILL_BORDER_WIDTH)
-
+        # 3. Subtle Default Border
+        pen = QPen(QColor(*PILL_BORDER_COLOR), PILL_BORDER_WIDTH)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(rect, radius, radius)
