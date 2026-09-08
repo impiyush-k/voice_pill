@@ -56,7 +56,7 @@ from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot
 from config import (
     GROQ_API_KEY, HOTKEY_ACTIVATE, HOTKEY_STREAM_ACTIVATE, HOTKEY_STOP,
     validate_config, SILENCE_DETECTION_ENABLED,
-    load_vpn_mode, save_vpn_mode, is_position_visible,
+    load_vpn_mode, save_vpn_mode, load_paste_mode, save_paste_mode, is_position_visible,
     STREAM_CHUNK_MIN_SEC, STREAM_CHUNK_MAX_SEC, STREAM_PAUSE_SLICE_SEC,
 )
 from autostart import is_autostart_enabled, enable_autostart, disable_autostart
@@ -570,7 +570,7 @@ class VoicePillApp:
 
             def _paste_worker():
                 time.sleep(0.05)
-                self._copy_and_paste(text)
+                self._copy_and_paste(text, mode=load_paste_mode())
 
             threading.Thread(target=_paste_worker, daemon=True).start()
 
@@ -622,7 +622,7 @@ class VoicePillApp:
         # Dispatch copy and paste on a background thread so Qt main event loop stays unblocked
         def _paste_worker():
             time.sleep(0.05)
-            self._copy_and_paste(text)
+            self._copy_and_paste(text, mode=load_paste_mode())
 
         threading.Thread(target=_paste_worker, daemon=True).start()
 

@@ -441,6 +441,28 @@ def save_pill_scale(mode: str, scale: float):
         pass
 
 
+PASTE_MODE_SAVE_FILE = _PROJECT_ROOT / "paste_mode.json"
+
+def load_paste_mode() -> str:
+    """Load paste mode setting ('auto', 'shift_insert', 'ctrl_shift_v', 'ctrl_v', 'copy_only'). Default: 'auto'."""
+    try:
+        if PASTE_MODE_SAVE_FILE.exists():
+            with open(PASTE_MODE_SAVE_FILE, "r") as f:
+                data = json.load(f)
+                return str(data.get("paste_mode", "auto"))
+    except (json.JSONDecodeError, KeyError, TypeError, OSError):
+        pass
+    return "auto"
+
+
+def save_paste_mode(mode: str):
+    """Save paste mode setting to disk."""
+    try:
+        with open(PASTE_MODE_SAVE_FILE, "w") as f:
+            json.dump({"paste_mode": mode}, f)
+    except OSError:
+        pass
+
 
 # ──────────────────────────────────────────────
 # Validation
