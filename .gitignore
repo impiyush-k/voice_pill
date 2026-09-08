@@ -2,8 +2,12 @@
 __pycache__/
 *.pyc
 vpn_mode.json
+position.json
+pill_scale.json
 crash.log
 .venv/
 venv/
+scratch/
 .idea/
 .vscode/
+

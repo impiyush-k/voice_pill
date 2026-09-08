@@ -83,8 +83,11 @@ class VoicePillContextMenu(QWidget):
     action_triggered = pyqtSignal(str)
     device_selected = pyqtSignal(object)  # Accepts int (device id) or str ("auto")
     preset_selected = pyqtSignal(str)
+    pill_scale_selected = pyqtSignal(str, float)  # mode ("auto", "100%", etc), factor (1.0, 1.25, etc)
     vpn_mode_toggled = pyqtSignal(bool)   # True = VPN mode just enabled, False = disabled
+    autostart_toggled = pyqtSignal(bool)  # True = enable autostart, False = disable
     closed = pyqtSignal()
+
 
     # Layout constants
     ITEM_HEIGHT = 34
@@ -194,7 +197,9 @@ class VoicePillContextMenu(QWidget):
     def build_default_menu(self, devices: list = None,
                            current_device_id: int | None = None,
                            current_preset: str = "classic",
-                           vpn_mode_enabled: bool = False):
+                           vpn_mode_enabled: bool = False,
+                           current_scale_mode: str = "auto",
+                           autostart_enabled: bool = False):
         """
         Build the default Voice Pill context menu.
 
@@ -202,6 +207,9 @@ class VoicePillContextMenu(QWidget):
             devices: List of AudioDevice objects from recorder.
             current_device_id: Currently selected device ID (None = auto/default).
             current_preset: Currently active animation preset key.
+            vpn_mode_enabled: Whether VPN mode is active.
+            current_scale_mode: Current pill scale mode ('auto', '100%', etc.).
+            autostart_enabled: Whether Windows startup shortcut exists.
         """
         devices = devices or []
 
@@ -288,6 +296,28 @@ class VoicePillContextMenu(QWidget):
             subtitle=active_preset_name,
         ))
 
+        # ── Pill Size submenu ──
+        scale_subitems = [
+            MenuItem("Auto (Display)", "", MenuItemType.ACTION,
+                     is_checked=(current_scale_mode == "auto"), subtitle="Display-based", item_id="scale_auto"),
+            MenuItem("100% (Default)", "", MenuItemType.ACTION,
+                     is_checked=(current_scale_mode == "100%"), item_id="scale_100"),
+            MenuItem("125%", "", MenuItemType.ACTION,
+                     is_checked=(current_scale_mode == "125%"), item_id="scale_125"),
+            MenuItem("150%", "", MenuItemType.ACTION,
+                     is_checked=(current_scale_mode == "150%"), item_id="scale_150"),
+            MenuItem("200%", "", MenuItemType.ACTION,
+                     is_checked=(current_scale_mode == "200%"), item_id="scale_200"),
+        ]
+
+        items.append(MenuItem(
+            "Pill Size", "🔍", MenuItemType.SUBMENU,
+            submenu_items=scale_subitems, item_id="pill_size",
+            subtitle="Auto (Display)" if current_scale_mode == "auto" else current_scale_mode,
+        ))
+        items.append(MenuItem("Reset Position to Center", "🎯", MenuItemType.ACTION,
+                              item_id="reset_position"))
+
         items.append(MenuItem("", "", MenuItemType.SEPARATOR))
         items.append(MenuItem("SESSION", "", MenuItemType.LABEL, item_id="label_session"))
 
@@ -312,10 +342,20 @@ class VoicePillContextMenu(QWidget):
         ))
 
         items.append(MenuItem("", "", MenuItemType.SEPARATOR))
+        items.append(MenuItem("SYSTEM", "", MenuItemType.LABEL, item_id="label_system"))
+        items.append(MenuItem(
+            "Start with Windows", "🚀", MenuItemType.ACTION,
+            item_id="toggle_autostart",
+            is_checked=autostart_enabled,
+            subtitle="Auto-start on boot" if autostart_enabled else "Off",
+        ))
+
+        items.append(MenuItem("", "", MenuItemType.SEPARATOR))
         items.append(MenuItem("Quit Voice Pill", "✕", MenuItemType.ACTION,
                               item_id="quit", is_danger=True))
 
         self.set_items(items)
+
 
     # ──────────────────────────────────────────
     # Show / Hide
@@ -585,10 +625,26 @@ class VoicePillContextMenu(QWidget):
                 elif item.item_id.startswith("preset_"):
                     preset_key = item.item_id.replace("preset_", "")
                     self.preset_selected.emit(preset_key)
+                # Check if it's a scale selection
+                elif item.item_id.startswith("scale_"):
+                    if item.item_id == "scale_auto":
+                        self.pill_scale_selected.emit("auto", 1.0)
+                    elif item.item_id == "scale_100":
+                        self.pill_scale_selected.emit("100%", 1.0)
+                    elif item.item_id == "scale_125":
+                        self.pill_scale_selected.emit("125%", 1.25)
+                    elif item.item_id == "scale_150":
+                        self.pill_scale_selected.emit("150%", 1.50)
+                    elif item.item_id == "scale_200":
+                        self.pill_scale_selected.emit("200%", 2.00)
                 # Check if it's a VPN mode toggle
                 elif item.item_id == "toggle_vpn_mode":
                     new_state = not item.is_checked
                     self.vpn_mode_toggled.emit(new_state)
+                # Check if it's an autostart toggle
+                elif item.item_id == "toggle_autostart":
+                    new_state = not item.is_checked
+                    self.autostart_toggled.emit(new_state)
                 else:
                     self.action_triggered.emit(item.item_id)
 
@@ -619,11 +675,16 @@ class VoicePillContextMenu(QWidget):
         submenu.action_triggered.connect(self.action_triggered.emit)
         submenu.device_selected.connect(self.device_selected.emit)
         submenu.preset_selected.connect(self.preset_selected.emit)
+        submenu.pill_scale_selected.connect(self.pill_scale_selected.emit)
+        submenu.autostart_toggled.connect(self.autostart_toggled.emit)
         
         # Ensure parent menu closes when a submenu action is taken
         submenu.action_triggered.connect(lambda _: self.dismiss())
         submenu.device_selected.connect(lambda _: self.dismiss())
         submenu.preset_selected.connect(lambda _: self.dismiss())
+        submenu.pill_scale_selected.connect(lambda *_: self.dismiss())
+        submenu.autostart_toggled.connect(lambda _: self.dismiss())
+
 
         # Position to the right of the parent menu, aligned to the clicked row
         y_offset = self.TOP_PADDING + sum(

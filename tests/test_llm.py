@@ -3,7 +3,8 @@ import sys
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(0, r'e:\project\june\real_things\voice_pill')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 
 from groq_client import GroqClient
 

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 # Load Environment
 # ──────────────────────────────────────────────
 
-_PROJECT_ROOT = Path(__file__).parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ENV_PATH = _PROJECT_ROOT / ".env"
 
 load_dotenv(_ENV_PATH, override=False)
@@ -151,9 +151,9 @@ AUDIO_CHUNK_SIZE = 1024           # Samples per callback (~64ms at 16kHz)
 AUDIO_DTYPE = "int16"             # 16-bit PCM
 DEFAULT_DEVICE = None             # None = system default; set to device index or name
 
-SILENCE_THRESHOLD_MULTIPLIER = 2.5  # Speech = amplitude > noise_floor × this (increased to ignore background birds)
-SILENCE_DURATION = 4.0              # Seconds of silence before auto-stop (increased to avoid premature cutoff)
-SILENCE_DETECTION_ENABLED = True    # Set to False to disable silence auto-stop completely
+SILENCE_THRESHOLD_MULTIPLIER = 2.5  # Speech = amplitude > noise_floor × this
+SILENCE_DURATION = 30.0             # Extended silence duration before auto-stop
+SILENCE_DETECTION_ENABLED = False   # False = recording only stops when user presses shortcut / clicks pill
 
 NOISE_CALIBRATION_DURATION = 0.5    # Seconds to sample ambient noise
 AMPLITUDE_SMOOTHING = 0.15          # EMA alpha (0=very smooth, 1=instant)
@@ -171,7 +171,7 @@ TRIM_SILENCE_PADDING_MS = 300       # Keep this much audio after the last detect
 TRIM_NOISE_FLOOR_MULTIPLIER = 2.0   # Speech = RMS > rolling_noise_floor × this (for the trim scan)
 
 # Amplitude normalization: RMS values above this are clipped to 1.0
-AMPLITUDE_NORMALIZATION_CEILING = 150.0
+AMPLITUDE_NORMALIZATION_CEILING = 2500.0
 
 # Minimum recording duration (seconds) — skip if shorter (accidental activation)
 MIN_RECORDING_DURATION = 0.5
@@ -181,22 +181,40 @@ MIN_RECORDING_DURATION = 0.5
 # UI — Dimensions
 # ──────────────────────────────────────────────
 
-DASH_WIDTH = 27                   # Idle dash width (px) — tiny, just a presence indicator
-DASH_HEIGHT = 6                   # Idle dash height (px)
-PILL_WIDTH = 80                   # Active pill width (px)
-PILL_HEIGHT = 33                  # Active pill height (px)
-CIRCLE_DIAMETER = 60              # Processing circle diameter (px) — 0.75x pill width
+BASE_DASH_WIDTH = 27               # Baseline idle dash width (px)
+BASE_DASH_HEIGHT = 6               # Baseline idle dash height (px)
+BASE_PILL_WIDTH = 90               # Baseline active pill width (px) — wider black background
+BASE_PILL_HEIGHT = 33              # Baseline active pill height (px)
+BASE_CIRCLE_DIAMETER = 60          # Baseline processing circle diameter (px)
 
-BAR_COUNT = 9                     # Number of audio visualization bars
-BAR_WIDTH = 3                     # Width of each bar (px)
-BAR_GAP = 4                       # Gap between bars (px)
-BAR_MIN_HEIGHT = 3                # Minimum bar height (px) — matches width for perfect circular dot
-BAR_MAX_HEIGHT = 21               # Maximum bar height (px) — full amplitude (increased slightly)
-BAR_PADDING_HORIZONTAL = 14       # Padding from pill edge to first/last bar
-BAR_PADDING_VERTICAL = 5          # Padding from pill top/bottom to bar tips
+BASE_BAR_COUNT = 9                 # Number of audio visualization bars
+BASE_BAR_WIDTH = 3                 # Width of each white bar (px) — restored to 3px
+BASE_BAR_GAP = 4                   # Gap between bars (px)
+BASE_BAR_MIN_HEIGHT = 3            # Minimum bar height (px)
+BASE_BAR_MAX_HEIGHT = 17           # Maximum bar height (px) — lower height
+BASE_BAR_PADDING_HORIZONTAL = 14   # Padding from pill edge to first/last bar
+BASE_BAR_PADDING_VERTICAL = 6      # Padding from pill top/bottom to bar tips
 
-# Widget bounding box (includes room for shadows and hover area)
-WIDGET_PADDING = 8                # Extra pixels around the drawn content
+BASE_WIDGET_PADDING = 8            # Extra pixels around drawn content for shadows/glow
+
+# Compatibility Aliases (Default 1.0x baseline values)
+DASH_WIDTH = BASE_DASH_WIDTH
+DASH_HEIGHT = BASE_DASH_HEIGHT
+PILL_WIDTH = BASE_PILL_WIDTH
+PILL_HEIGHT = BASE_PILL_HEIGHT
+CIRCLE_DIAMETER = BASE_CIRCLE_DIAMETER
+BAR_COUNT = BASE_BAR_COUNT
+BAR_WIDTH = BASE_BAR_WIDTH
+BAR_GAP = BASE_BAR_GAP
+BAR_MIN_HEIGHT = BASE_BAR_MIN_HEIGHT
+BAR_MAX_HEIGHT = BASE_BAR_MAX_HEIGHT
+BAR_PADDING_HORIZONTAL = BASE_BAR_PADDING_HORIZONTAL
+BAR_PADDING_VERTICAL = BASE_BAR_PADDING_VERTICAL
+WIDGET_PADDING = BASE_WIDGET_PADDING
+
+PILL_SCALE_SAVE_FILE = _PROJECT_ROOT / "pill_scale.json"
+REFERENCE_SCREEN_HEIGHT = 1080.0    # Reference laptop display height for auto-scaling
+
 
 
 # ──────────────────────────────────────────────
@@ -310,14 +328,43 @@ POSITION_SAVE_FILE = _PROJECT_ROOT / "position.json"
 # Position Persistence
 # ──────────────────────────────────────────────
 
+def is_position_visible(x: int, y: int, width: int = 100, height: int = 60) -> bool:
+    """Verify if (x, y) widget coordinates are visible on any active display."""
+    try:
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if not app:
+            app = QApplication(sys.argv if hasattr(sys, 'argv') else [])
+        screens = app.screens()
+        if not screens:
+            return True
+        for screen in screens:
+            geom = screen.availableGeometry()
+            # Require at least 20px of the widget to overlap visible screen geometry
+            if (geom.left() - width + 20 <= x <= geom.right() - 20) and \
+               (geom.top() - height + 20 <= y <= geom.bottom() - 20):
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def load_saved_position():
-    """Load widget position from disk. Returns (x, y) or None."""
+    """Load widget position from disk. Returns (x, y) or None if corrupted or off-screen."""
     try:
         if POSITION_SAVE_FILE.exists():
             with open(POSITION_SAVE_FILE, "r") as f:
                 data = json.load(f)
-                return (data["x"], data["y"])
-    except (json.JSONDecodeError, KeyError, TypeError, OSError):
+                x, y = int(data["x"]), int(data["y"])
+                if is_position_visible(x, y):
+                    return (x, y)
+                else:
+                    # Off-screen position — delete saved file and return None
+                    try:
+                        POSITION_SAVE_FILE.unlink()
+                    except OSError:
+                        pass
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError):
         # Corrupted file — delete it, use defaults
         try:
             POSITION_SAVE_FILE.unlink()
@@ -327,12 +374,15 @@ def load_saved_position():
 
 
 def save_position(x: int, y: int):
-    """Save widget position to disk."""
+    """Save widget position to disk if it is visible on screen."""
+    if not is_position_visible(x, y):
+        return
     try:
         with open(POSITION_SAVE_FILE, "w") as f:
             json.dump({"x": x, "y": y}, f)
     except OSError:
         pass  # Non-critical — silently fail
+
 
 
 # ──────────────────────────────────────────────
@@ -358,6 +408,38 @@ def save_vpn_mode(enabled: bool):
             json.dump({"vpn_mode": enabled}, f)
     except OSError:
         pass  # Non-critical — silently fail
+
+
+# ──────────────────────────────────────────────
+# Pill Size / Scale Persistence
+# ──────────────────────────────────────────────
+
+def load_pill_scale() -> tuple[str, float]:
+    """
+    Load the pill scale configuration from disk.
+    Returns (mode_str, custom_scale_factor).
+    Modes: 'auto', '100%', '125%', '150%', '200%'
+    """
+    try:
+        if PILL_SCALE_SAVE_FILE.exists():
+            with open(PILL_SCALE_SAVE_FILE, "r") as f:
+                data = json.load(f)
+                mode = data.get("mode", "auto")
+                scale = float(data.get("scale", 1.0))
+                return (mode, scale)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError):
+        pass
+    return ("auto", 1.0)
+
+
+def save_pill_scale(mode: str, scale: float):
+    """Save the pill scale configuration to disk."""
+    try:
+        with open(PILL_SCALE_SAVE_FILE, "w") as f:
+            json.dump({"mode": mode, "scale": scale}, f)
+    except OSError:
+        pass
+
 
 
 # ──────────────────────────────────────────────

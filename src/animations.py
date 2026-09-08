@@ -172,6 +172,7 @@ class AnimationEngine:
         self._bar_heights: list[float] = [0.0] * BAR_COUNT  # 0.0 - 1.0
         self._target_amplitude: float = 0.0
         self._current_amplitude: float = 0.0
+        self._speech_envelope: float = 0.0  # Smooth 0.0 (silent dot state) -> 1.0 (full height speech state)
         self._preset: str = DEFAULT_ANIMATION_PRESET
 
         # Bar appearance animation (stagger fade-in)
@@ -210,6 +211,13 @@ class AnimationEngine:
             (self._target_amplitude - self._current_amplitude) * smooth_factor
         )
 
+        # Smooth speech envelope (fast attack on speech -> 1.0, graceful ~1.0s release on silence -> 0.0)
+        is_speech = self._current_amplitude > 0.015
+        target_env = 1.0 if is_speech else 0.0
+        env_speed = 0.25 * fps_ratio if is_speech else 0.05 * fps_ratio
+        self._speech_envelope += (target_env - self._speech_envelope) * env_speed
+        self._speech_envelope = max(0.0, min(1.0, self._speech_envelope))
+
         # Update bar appearance animation
         if self._bars_appearing:
             self._update_bar_appear()
@@ -233,7 +241,7 @@ class AnimationEngine:
         """Set the target audio amplitude (0.0 - 1.0)."""
         self._target_amplitude = max(0.0, min(1.0, amplitude))
 
-    def get_bar_heights_px(self) -> list[float]:
+    def get_bar_heights_px(self, min_h: float = BAR_MIN_HEIGHT, max_h: float = BAR_MAX_HEIGHT) -> list[float]:
         """
         Get bar heights in pixels, based on current preset and amplitude.
 
@@ -246,12 +254,13 @@ class AnimationEngine:
         result = []
         for i, h in enumerate(raw_heights):
             appear = self._bar_appear_progress[i]
-            px = BAR_MIN_HEIGHT + h * (BAR_MAX_HEIGHT - BAR_MIN_HEIGHT)
+            px = min_h + h * (max_h - min_h)
             # During appear, scale from 0 to full height
             px *= appear
-            result.append(max(BAR_MIN_HEIGHT * appear, px))
+            result.append(max(min_h * appear, px))
 
         return result
+
 
     def _compute_bar_preset(self) -> list[float]:
         """Compute raw bar heights (0.0 - 1.0) based on active preset."""
@@ -275,32 +284,27 @@ class AnimationEngine:
 
     def _preset_classic(self, amp: float) -> list[float]:
         """
-        Classic bars: smooth alternating pattern, scaled by amplitude.
-        Idle: static alternating 'big and dot'.
+        Classic bars: predefined full-range alternating dancing pattern.
+        During speech: dances smoothly all the way from dot (0.0) to full bar (1.0) and back.
+        During ambient noise / silence: smoothly glides down to dot state (0.0).
         """
         heights = []
-        is_idle = amp < 0.05
+        dance_speed = 7.0  # Responsive 7.0 Hz dancing frequency
         
         for i in range(BAR_COUNT):
-            if is_idle:
-                if self._is_recording:
-                    # All dots when silently recording
-                    h = 0.0
-                else:
-                    # Static alternating pattern (Dot and Big) when just hovering (ready)
-                    h = 0.0 if i % 2 == 0 else 0.5
-                heights.append(h)
+            if not self._is_recording:
+                # Hovering in READY state: static alternating pattern (Dot and Big)
+                h = 0.0 if i % 2 == 0 else 0.5
             else:
-                # Alternating bars swapping smoothly, scaled by amplitude
+                # Predefined full-range dance pattern (0.0 = pure dot, 1.0 = full bar)
                 phase = math.pi if i % 2 == 0 else 0.0
-                raw = math.sin(self._time * 9.5 + phase) # Slower, more elegant fixed animation speed
+                raw = math.sin(self._time * dance_speed + phase)
+                predefined_factor = 0.5 + 0.5 * raw  # Ranges strictly 0.0 (dot) to 1.0 (full bar)
                 
-                # factor ranges from ~0.2 (dot) to 1.0 (full bar)
-                factor = 0.2 + 0.8 * (0.5 + 0.5 * raw)
+                # Multiply full-range predefined dance by smooth speech envelope (1.0 speech, 0.0 silence)
+                h = predefined_factor * self._speech_envelope
                 
-                # Height depends on amplitude! Smoothly decay to 0.0
-                h = min(1.0, amp * factor)
-                heights.append(h)
+            heights.append(h)
         return heights
 
     def _preset_processing(self) -> list[float]:
@@ -319,22 +323,31 @@ class AnimationEngine:
 
     def _preset_wave(self, amp: float) -> list[float]:
         """
-        Wave: sine wave flows left to right through the bars.
-        Modulated by audio amplitude.
+        Wave: sine wave flows left to right through the bars (dot to bar to dot).
+        Modulated by speech envelope.
         """
         heights = []
+        dance_speed = 3.0
         for i in range(BAR_COUNT):
-            wave = math.sin(self._time * 3.0 + i * (math.pi / BAR_COUNT))
-            h = amp * (0.5 + 0.5 * wave)
+            if not self._is_recording:
+                h = 0.0
+            else:
+                wave = math.sin(self._time * dance_speed + i * (math.pi / BAR_COUNT))
+                predefined_factor = 0.5 + 0.5 * wave
+                h = predefined_factor * self._speech_envelope
             heights.append(max(0.0, min(1.0, h)))
         return heights
 
     def _preset_pulse(self, amp: float) -> list[float]:
         """
-        Pulse: all bars pulse together with a breathing effect.
+        Pulse: all bars pulse together from dot to bar and back.
+        Modulated by speech envelope.
         """
-        breathe = math.sin(self._time * 2.0) * 0.1
-        h = max(0.0, min(1.0, amp + breathe))
+        if not self._is_recording:
+            return [0.0] * BAR_COUNT
+        breathe = math.sin(self._time * 2.0)
+        predefined_factor = 0.5 + 0.5 * breathe
+        h = predefined_factor * self._speech_envelope
         return [h] * BAR_COUNT
 
     def set_preset(self, preset: str):
@@ -392,7 +405,8 @@ class AnimationEngine:
     # Particle System
     # ──────────────────────────────────────────
 
-    def start_particles(self, bar_positions: list[tuple[float, float]] | None = None):
+    def start_particles(self, bar_positions: list[tuple[float, float]] | None = None,
+                        circle_diameter: float | None = None, scale: float = 1.0):
         """
         Initialize and start the particle system.
         Called when transitioning RECORDING → PROCESSING.
@@ -400,12 +414,19 @@ class AnimationEngine:
         Args:
             bar_positions: Optional list of (x, y) positions of bars
                           to spawn initial particles from (dissolution effect).
+            circle_diameter: Scaled circle diameter.
+            scale: Overall UI scale factor.
         """
         self._particles = []
         self._dissolve_start_time = self._time
 
-        outer_r = CIRCLE_DIAMETER * PARTICLE_OUTER_RADIUS_FRAC
-        inner_r = CIRCLE_DIAMETER * PARTICLE_INNER_RADIUS_FRAC
+        cd = circle_diameter if circle_diameter is not None else CIRCLE_DIAMETER
+        outer_r = cd * PARTICLE_OUTER_RADIUS_FRAC
+        inner_r = cd * PARTICLE_INNER_RADIUS_FRAC
+
+        max_p_radius = PARTICLE_MAX_RADIUS * scale
+        min_p_radius = PARTICLE_MIN_RADIUS * scale
+        center_p_radius = PARTICLE_CENTER_RADIUS * scale
 
         positions = bar_positions or []
 
@@ -421,7 +442,7 @@ class AnimationEngine:
             self._particles.append(Particle(
                 ring="outer", index=i, count=PARTICLE_OUTER_COUNT,
                 orbit_radius=outer_r, orbit_speed=PARTICLE_OUTER_SPEED,
-                base_radius=PARTICLE_MAX_RADIUS, spawn_x=sx, spawn_y=sy,
+                base_radius=max_p_radius, spawn_x=sx, spawn_y=sy,
             ))
 
         # Inner ring — slightly smaller particles, faster orbit (√2 ratio)
@@ -430,7 +451,7 @@ class AnimationEngine:
             self._particles.append(Particle(
                 ring="inner", index=i, count=PARTICLE_INNER_COUNT,
                 orbit_radius=inner_r, orbit_speed=PARTICLE_INNER_SPEED,
-                base_radius=max(PARTICLE_MIN_RADIUS, PARTICLE_MAX_RADIUS * 0.85),
+                base_radius=max(min_p_radius, max_p_radius * 0.85),
                 spawn_x=sx, spawn_y=sy,
             ))
 
@@ -438,10 +459,11 @@ class AnimationEngine:
         self._particles.append(Particle(
             ring="center", index=0, count=1,
             orbit_radius=0.0, orbit_speed=0.0,
-            base_radius=PARTICLE_CENTER_RADIUS, spawn_x=0.0, spawn_y=0.0,
+            base_radius=center_p_radius, spawn_x=0.0, spawn_y=0.0,
         ))
 
         self._particles_active = True
+
 
     def stop_particles(self):
         """Stop the particle system."""
@@ -531,6 +553,7 @@ class AnimationEngine:
         """Full reset — return to clean state."""
         self._target_amplitude = 0.0
         self._current_amplitude = 0.0
+        self._speech_weight = 0.0
         self._bar_heights = [0.0] * BAR_COUNT
         self.reset_bar_appear()
         self.stop_particles()

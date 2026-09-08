@@ -32,6 +32,7 @@ class SystemTrayManager:
 
         # Callbacks
         self._on_show: callable = None
+        self._on_reset_position: callable = None
         self._on_start_recording: callable = None
         self._on_quit: callable = None
 
@@ -121,6 +122,10 @@ class SystemTrayManager:
         show_action = self._menu.addAction("Show Voice Pill")
         show_action.triggered.connect(lambda: self._on_show() if self._on_show else None)
 
+        # Reset Position to Center
+        reset_action = self._menu.addAction("Reset Position to Center")
+        reset_action.triggered.connect(lambda: self._on_reset_position() if self._on_reset_position else None)
+
         self._menu.addSeparator()
 
         # Start Recording
@@ -162,9 +167,10 @@ class SystemTrayManager:
         """Hide the tray icon."""
         self._tray.hide()
 
-    def set_callbacks(self, on_show=None, on_start_recording=None, on_quit=None):
+    def set_callbacks(self, on_show=None, on_reset_position=None, on_start_recording=None, on_quit=None):
         """Set callback functions for tray menu actions."""
         self._on_show = on_show
+        self._on_reset_position = on_reset_position
         self._on_start_recording = on_start_recording
         self._on_quit = on_quit
 

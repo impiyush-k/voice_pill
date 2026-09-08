@@ -81,6 +81,8 @@ class AudioRecorder(QObject):
         self._selected_device: int | None = DEFAULT_DEVICE
         self._smoothed_amplitude: float = 0.0
         self._last_audio_duration: float = 0.0  # Duration (s) of last trimmed recording
+        self._noise_calibration_samples: list[float] = []
+        self._calibrated_noise_threshold: float = 350.0
 
         # Silence detector
         self.silence_detector = SilenceDetector()
@@ -112,13 +114,21 @@ class AudioRecorder(QObject):
         )
 
         # Host-API preference: WASAPI gives the cleanest modern capture on Windows,
-        # then MME (most compatible), then DirectSound, then others. Lower = better.
+        # ALSA/Pulse/PipeWire on Linux. Lower = better rank.
         _HOSTAPI_PREFERENCE = {
             'windows wasapi': 0,
             'mme': 1,
             'windows directsound': 2,
             'windows wdm-ks': 3,
+            'alsa': 0,
+            'pulseaudio': 0,
+            'pulse': 0,
+            'pipewire': 0,
+            'jack audio connection kit': 1,
+            'jack': 1,
+            'core audio': 0,
         }
+
 
         def _clean_name(raw: str) -> str:
             """Normalize a device name for dedup (lowercase + collapse whitespace)."""
@@ -327,6 +337,8 @@ class AudioRecorder(QObject):
         with self._buffer_lock:
             self._audio_buffer = []
         self._smoothed_amplitude = 0.0
+        self._noise_calibration_samples = []
+        self._calibrated_noise_threshold = 600.0
 
         try:
             self._stream = sd.InputStream(
@@ -572,8 +584,20 @@ class AudioRecorder(QObject):
         audio_float = indata.astype(np.float32)
         rms = float(np.sqrt(np.mean(audio_float ** 2)))
 
-        # 3. Normalize to 0.0-1.0
-        normalized = min(1.0, rms / AMPLITUDE_NORMALIZATION_CEILING)
+        # 3. Dynamic background noise floor calibration (samples initial 0.5s of recording)
+        elapsed = time.monotonic() - self._record_start_time
+        if elapsed <= 0.5:
+            self._noise_calibration_samples.append(rms)
+            ambient_median = float(np.median(self._noise_calibration_samples))
+            self._calibrated_noise_threshold = max(ambient_median * 2.0, 600.0)
+
+        # Recognize human speech vs ambient room noise:
+        # Anything <= _calibrated_noise_threshold is ambient noise (0.0 -> dots)
+        # Anything > _calibrated_noise_threshold is human speech (1.0 -> full bar animation)
+        if rms <= self._calibrated_noise_threshold:
+            normalized = 0.0
+        else:
+            normalized = 1.0
 
         # 4. Apply exponential moving average (EMA) smoothing
         self._smoothed_amplitude = (
