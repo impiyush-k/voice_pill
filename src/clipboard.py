@@ -85,9 +85,9 @@ def _send_paste_shortcut(mode: str = "auto") -> None:
     """
     Simulate paste keystroke at cursor.
     Modes:
-        'auto': Uses Shift+Insert on Linux (universal paste for both terminals and GUI/Electron apps)
-        'shift_insert': Simulates Shift+Insert
+        'auto': Detects active window. Sends Ctrl+Shift+V for terminals, Ctrl+V for standard apps.
         'ctrl_shift_v': Simulates Ctrl+Shift+V
+        'shift_insert': Simulates Shift+Insert
         'ctrl_v': Simulates Ctrl+V
     """
     time.sleep(0.08)
@@ -95,9 +95,10 @@ def _send_paste_shortcut(mode: str = "auto") -> None:
     # Determine effective target shortcut
     effective = mode
     if effective == "auto":
-        # On Linux, Shift+Insert is universal across GTK, Qt, Electron (Antigravity/VS Code),
-        # xterm.js (integrated terminal), and standalone terminals.
-        effective = "shift_insert" if sys.platform == "linux" else "ctrl_v"
+        if is_active_window_terminal():
+            effective = "ctrl_shift_v"
+        else:
+            effective = "ctrl_v"
 
     # 1. Linux Primary: evdev UInput kernel virtual keyboard
     if sys.platform == "linux":
@@ -112,32 +113,32 @@ def _send_paste_shortcut(mode: str = "auto") -> None:
             ui.syn()
             time.sleep(0.01)
 
-            if effective == "shift_insert":
-                ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
-                ui.write(e.EV_KEY, e.KEY_INSERT, 1)
+            def send_evdev_combo(modifiers, main_key):
+                # 1. Press modifiers step-by-step so Wayland/X11 registers modifier state
+                for m in modifiers:
+                    ui.write(e.EV_KEY, m, 1)
+                    ui.syn()
+                    time.sleep(0.015)
+                # 2. Press main key
+                ui.write(e.EV_KEY, main_key, 1)
                 ui.syn()
-                time.sleep(0.03)
-                ui.write(e.EV_KEY, e.KEY_INSERT, 0)
-                ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
+                time.sleep(0.035)
+                # 3. Release main key
+                ui.write(e.EV_KEY, main_key, 0)
                 ui.syn()
-            elif effective == "ctrl_shift_v":
-                ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 1)
-                ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
-                ui.write(e.EV_KEY, e.KEY_V, 1)
-                ui.syn()
-                time.sleep(0.03)
-                ui.write(e.EV_KEY, e.KEY_V, 0)
-                ui.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
-                ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 0)
-                ui.syn()
+                time.sleep(0.015)
+                # 4. Release modifiers
+                for m in reversed(modifiers):
+                    ui.write(e.EV_KEY, m, 0)
+                    ui.syn()
+                    time.sleep(0.01)
+
+            if effective == "ctrl_shift_v":
+                send_evdev_combo([e.KEY_LEFTCTRL, e.KEY_LEFTSHIFT], e.KEY_V)
+            elif effective == "shift_insert":
+                send_evdev_combo([e.KEY_LEFTSHIFT], e.KEY_INSERT)
             else: # ctrl_v
-                ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 1)
-                ui.write(e.EV_KEY, e.KEY_V, 1)
-                ui.syn()
-                time.sleep(0.03)
-                ui.write(e.EV_KEY, e.KEY_V, 0)
-                ui.write(e.EV_KEY, e.KEY_LEFTCTRL, 0)
-                ui.syn()
+                send_evdev_combo([e.KEY_LEFTCTRL], e.KEY_V)
 
             ui.close()
             return
